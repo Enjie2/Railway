@@ -70,20 +70,13 @@ class FreeGameHostRenewal:
             self.log(f"TG发送失败: {e}")
 
     def close_popups(self, sb):
-        """关闭 Cookie 隐私弹窗 + 任何广告"""
-        self.log("🔍 正在关闭弹窗...")
+        self.log("🔍 关闭 Cookie/广告弹窗...")
         try:
-            # Google Cookie 隐私小弹窗（你截图里的那个）
-            if sb.is_element_visible('button[aria-label*="close" i], .x, button:has-text("×")', timeout=8):
-                sb.click('button[aria-label*="close" i], .x, button:has-text("×")')
-                self.log("✅ 已关闭 Cookie 隐私弹窗")
-                time.sleep(3)
-            # 其他可能的广告 Close
-            for text in ["Close", "✕", "关闭"]:
-                if sb.is_element_visible(f'button:has-text("{text}")', timeout=5):
-                    sb.click(f'button:has-text("{text}")')
-                    time.sleep(2)
-                    break
+            for _ in range(3):
+                if sb.is_element_visible('button[aria-label*="close" i], button:has-text("×"), button:has-text("关闭")', timeout=6):
+                    sb.click('button[aria-label*="close" i], button:has-text("×")')
+                    self.log("✅ 已关闭弹窗")
+                    time.sleep(3)
         except Exception as e:
             self.log(f"弹窗关闭异常: {e}")
 
@@ -103,20 +96,21 @@ class FreeGameHostRenewal:
                 try:
                     # ==================== 登录 ====================
                     self.log("🌐 打开登录页面...")
-                    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=8)
-                    time.sleep(8)
-                    self.shot(sb, f"login_{idx}_raw.png")          # 原始页面截图
+                    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=10)
+                    time.sleep(10)
+                    self.shot(sb, f"login_{idx}_raw.png")
 
                     self.close_popups(sb)
 
-                    # 根据你截图精确 selector
-                    self.log("⏳ 等待 USERNAME OR EMAIL 输入框...")
-                    sb.wait_for_element_visible('input[placeholder*="USERNAME OR EMAIL" i]', timeout=25)
+                    # 等待登录标题（最可靠）
+                    self.log("⏳ 等待 Login to Continue 标题...")
+                    sb.wait_for_element_visible('h1:has-text("Login to Continue")', timeout=30)
                     self.shot(sb, f"login_{idx}_form.png")
 
-                    sb.type('input[placeholder*="USERNAME OR EMAIL" i]', email)
-                    sb.type('input[placeholder*="PASSWORD" i], input[type="password"]', password)
-                    self.log("✅ 账号密码已填写")
+                    # 最稳的输入方式：直接用页面上的第1个和第2个 input
+                    self.log("✅ 填写账号密码...")
+                    sb.type('input', email)                    # 第1个输入框 = USERNAME OR EMAIL
+                    sb.type('input:nth-of-type(2)', password)  # 第2个输入框 = PASSWORD
 
                     sb.click('button:has-text("LOGIN")')
                     time.sleep(10)
@@ -128,44 +122,41 @@ class FreeGameHostRenewal:
 
                     self.log("✅ 登录成功")
 
-                    # ==================== 续期每个服务器 ====================
+                    # ==================== 续期服务器 ====================
                     success_count = 0
                     for server_id in SERVER_IDS:
                         try:
                             url = f"{PANEL_BASE}/server/{server_id}"
-                            self.log(f"🌐 打开服务器页面: {server_id}")
+                            self.log(f"🌐 打开服务器 {server_id}")
                             sb.uc_open_with_reconnect(url, reconnect_time=6)
                             time.sleep(8)
                             self.close_popups(sb)
                             self.shot(sb, f"server_{server_id}_{idx}.png")
 
-                            # RENEW SERVER 区域的续期按钮（根据你截图优化）
                             renew_clicked = False
                             for selector in [
                                 'button:has-text("增加8小时")',
                                 'button:has-text("8小时")',
                                 'button:has-text("Renew")',
                                 'button:has-text("+8")',
-                                'button:has-text("RENEW SERVER")',
-                                '[class*="renew"] button'
+                                'button:has-text("RENEW SERVER")'
                             ]:
                                 if sb.is_element_visible(selector, timeout=15):
                                     sb.click(selector)
-                                    self.log(f"✅ 已点击续期按钮 → {server_id}")
+                                    self.log(f"✅ 已点击续期 → {server_id}")
                                     renew_clicked = True
                                     time.sleep(8)
                                     success_count += 1
                                     break
 
                             if not renew_clicked:
-                                self.log(f"⚠️ 未找到续期按钮（可能在 cooldown 中）→ {server_id}")
+                                self.log(f"⚠️ 未找到续期按钮（可能 cooldown）→ {server_id}")
                                 self.shot(sb, f"no_renew_btn_{server_id}_{idx}.png")
 
                         except Exception as e:
-                            self.log(f"服务器 {server_id} 处理异常: {e}")
+                            self.log(f"服务器 {server_id} 异常: {e}")
                             self.shot(sb, f"server_error_{server_id}_{idx}.png")
 
-                    # ==================== 总结 ====================
                     extra = f"成功续期 {success_count}/{len(SERVER_IDS)} 个服务器"
                     self.send_tg("✅", "续期完成", masked, ", ".join(SERVER_IDS), "已执行", extra, screenshot=self.shot(sb, f"final_{idx}.png"))
 
