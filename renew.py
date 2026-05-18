@@ -3,7 +3,7 @@ import time
 import re
 import random
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 # ====================== 配置 ======================
 ACCOUNTS = os.getenv("FG_ACCOUNTS", "").strip()          # 邮箱-----密码   一行一个
@@ -32,16 +32,12 @@ def send_telegram(message: str, screenshot_paths: list = None):
         pass
 
 def close_ad_popup(page):
-    """关闭广告弹窗"""
-    print("🔍 正在尝试关闭广告弹窗...")
-    close_selectors = [
-        'button:has-text("Close")', 'button:has-text("×")', 'button:has-text("✕")',
-        'button[aria-label*="Close" i]', '[class*="close"] button'
-    ]
-    for sel in close_selectors:
+    print("🔍 尝试关闭广告弹窗...")
+    selectors = ['button:has-text("Close")', 'button:has-text("×")', 'button:has-text("✕")', '[class*="close"] button']
+    for sel in selectors:
         try:
             btn = page.locator(sel).first
-            if btn.is_visible(timeout=3000):
+            if btn.is_visible(timeout=4000):
                 btn.click()
                 print("✅ 已关闭广告弹窗")
                 time.sleep(3)
@@ -51,30 +47,23 @@ def close_ad_popup(page):
     return False
 
 def handle_cookie_consent(page):
-    """处理 Cookie Consent 弹窗（点击“同意”）"""
-    print("🔍 正在处理 Cookie Consent 弹窗...")
-    consent_selectors = [
-        'button:has-text("同意")',
-        'button:has-text("同意")',  # 重复确保优先级
-        page.get_by_role("button", name=re.compile("同意", re.I)),
-        'button:has-text("I agree")'  # 英文备用
-    ]
-    for sel in consent_selectors:
+    print("🔍 尝试点击 Cookie「同意」...")
+    selectors = ['button:has-text("同意")', page.get_by_role("button", name=re.compile("同意", re.I))]
+    for sel in selectors:
         try:
             btn = page.locator(sel).first if isinstance(sel, str) else sel
             if btn.is_visible(timeout=5000):
                 btn.click()
-                print("✅ 已点击 Cookie Consent「同意」按钮")
+                print("✅ 已点击「同意」")
                 time.sleep(4)
                 return True
         except:
             continue
-    print("ℹ️  未检测到 Cookie Consent 弹窗（可能已同意）")
     return False
 
 def main():
     if not ACCOUNTS or not SERVER_IDS:
-        send_telegram("❌ FreeGameHost 续期失败：未配置账号或服务器ID")
+        send_telegram("❌ 未配置账号或服务器ID")
         return
 
     account_list = [line.strip() for line in ACCOUNTS.split("\n") if "-----" in line]
@@ -94,112 +83,114 @@ def main():
         page = context.new_page()
 
         for account_line in account_list:
-            try:
-                email, password = account_line.split("-----", 1)
-                email = email.strip()
-                password = password.strip()
+            email, password = account_line.split("-----", 1)
+            email = email.strip()
+            password = password.strip()
 
-                print(f"🔑 正在处理账号: {email}")
+            print(f"🔑 正在处理账号: {email}")
 
-                # ==================== 登录页面 ====================
-                page.goto(f"{PANEL_URL}/auth/login", wait_until="networkidle", timeout=90000)
-                time.sleep(8)
+            success = False
+            for attempt in range(MAX_RETRIES):
+                try:
+                    print(f"   → 第 {attempt+1} 次尝试打开登录页...")
+                    page.goto(f"{PANEL_URL}/auth/login", wait_until="domcontentloaded", timeout=120000)
+                    time.sleep(6)
 
-                # 第一张截图（原始页面）
-                page.screenshot(path=f"login_{email}_step1_raw.png")
+                    # 截图原始页面
+                    page.screenshot(path=f"login_{email}_step1_raw.png")
 
-                # 处理弹窗
-                close_ad_popup(page)
-                handle_cookie_consent(page)
+                    # 处理弹窗
+                    close_ad_popup(page)
+                    handle_cookie_consent(page)
 
-                # 第二张截图（处理完弹窗后）
-                page.screenshot(path=f"login_{email}_step2_clean.png")
+                    # 再等页面完全稳定
+                    page.wait_for_load_state("networkidle", timeout=30000)
+                    page.screenshot(path=f"login_{email}_step2_clean.png")
 
-                # 填充邮箱
-                email_selectors = [
-                    'input[type="email"]', 'input[name="email"]',
-                    'input[placeholder*="Email" i]', 'input[placeholder*="邮箱" i]'
-                ]
-                for sel in email_selectors:
-                    try:
-                        elem = page.locator(sel).first
-                        if elem.is_visible(timeout=10000):
-                            elem.fill(email)
-                            break
-                    except:
-                        continue
-
-                # 填充密码
-                page.fill('input[type="password"]', password)
-
-                # 点击登录
-                page.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in"), button:has-text("登录")', timeout=20000)
-                page.wait_for_load_state("networkidle", timeout=60000)
-                time.sleep(random.uniform(5, 8))
-
-                print(f"✅ 账号 {email} 登录成功")
-
-                # ==================== 续期服务器 ====================
-                success_count = 0
-                screenshots = []
-
-                for server_id in SERVER_IDS:
-                    for retry in range(MAX_RETRIES):
+                    # 填充邮箱
+                    email_selectors = ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="Email" i]']
+                    for sel in email_selectors:
                         try:
-                            page.goto(f"{PANEL_URL}/server/{server_id}", wait_until="networkidle", timeout=60000)
-                            time.sleep(6)
+                            elem = page.locator(sel).first
+                            if elem.is_visible(timeout=10000):
+                                elem.fill(email)
+                                break
+                        except:
+                            continue
 
-                            button_selectors = [
-                                'button:has-text("增加8小时")',
-                                'button:has-text("8小时")',
-                                'button:has-text("Renew")',
-                                'button:has-text("+8")',
-                                page.get_by_text(re.compile(r"8小时|Renew|increase", re.I)).first
-                            ]
+                    # 填充密码 + 登录
+                    page.fill('input[type="password"]', password)
+                    page.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in"), button:has-text("登录")', timeout=20000)
 
-                            clicked = False
-                            for sel in button_selectors:
-                                try:
-                                    btn = page.locator(sel).first if isinstance(sel, str) else sel
-                                    if btn.is_visible(timeout=8000):
-                                        btn.click()
-                                        print(f"✅ 已点击续期: {server_id}")
-                                        clicked = True
-                                        break
-                                except:
-                                    continue
+                    page.wait_for_load_state("networkidle", timeout=60000)
+                    time.sleep(random.uniform(5, 8))
 
-                            if not clicked:
-                                raise Exception("未找到续期按钮")
+                    print(f"✅ 账号 {email} 登录成功")
+                    success = True
+                    break
 
-                            time.sleep(5)
-                            success_count += 1
+                except Exception as e:
+                    print(f"   ⚠️ 第 {attempt+1} 次失败: {e}")
+                    if attempt == MAX_RETRIES - 1:
+                        raise
+                    time.sleep(10)
 
-                            shot = f"screenshot_{server_id}.png"
-                            page.screenshot(path=shot)
-                            screenshots.append(shot)
-                            break
+            if not success:
+                continue
 
-                        except Exception as e:
-                            print(f"⚠️ 服务器 {server_id} 第 {retry+1} 次失败: {e}")
-                            if retry == MAX_RETRIES - 1:
-                                raise
-                            time.sleep(10)
+            # ==================== 续期服务器 ====================
+            success_count = 0
+            screenshots = []
 
-                msg = f"""✅ FreeGameHost 续期完成
+            for server_id in SERVER_IDS:
+                for retry in range(MAX_RETRIES):
+                    try:
+                        page.goto(f"{PANEL_URL}/server/{server_id}", wait_until="domcontentloaded", timeout=60000)
+                        time.sleep(6)
+
+                        button_selectors = [
+                            'button:has-text("增加8小时")',
+                            'button:has-text("8小时")',
+                            'button:has-text("Renew")',
+                            'button:has-text("+8")',
+                            page.get_by_text(re.compile(r"8小时|Renew|increase", re.I)).first
+                        ]
+
+                        clicked = False
+                        for sel in button_selectors:
+                            try:
+                                btn = page.locator(sel).first if isinstance(sel, str) else sel
+                                if btn.is_visible(timeout=8000):
+                                    btn.click()
+                                    print(f"✅ 已点击续期: {server_id}")
+                                    clicked = True
+                                    break
+                            except:
+                                continue
+
+                        if not clicked:
+                            raise Exception("未找到续期按钮")
+
+                        time.sleep(5)
+                        success_count += 1
+
+                        shot = f"screenshot_{server_id}.png"
+                        page.screenshot(path=shot)
+                        screenshots.append(shot)
+                        break
+
+                    except Exception as e:
+                        print(f"⚠️ 服务器 {server_id} 第 {retry+1} 次失败: {e}")
+                        if retry == MAX_RETRIES - 1:
+                            raise
+                        time.sleep(10)
+
+            msg = f"""✅ FreeGameHost 续期完成
 账号: {email}
 服务器: {", ".join(SERVER_IDS)}
 成功: {success_count}/{len(SERVER_IDS)}
 时间: {time.strftime("%Y-%m-%d %H:%M:%S")}"""
-                send_telegram(msg, screenshots)
-
-            except Exception as e:
-                print(f"❌ 账号 {email} 处理失败: {e}")
-                send_telegram(f"❌ FreeGameHost 账号 {email} 续期失败\n错误: {str(e)[:300]}")
-                # 发送调试截图
-                debug_shots = list(Path(".").glob(f"login_{email}*.png"))
-                if debug_shots:
-                    send_telegram(f"📸 账号 {email} 登录调试截图（含弹窗处理前后）", debug_shots)
+            send_telegram(msg, screenshots)
 
         browser.close()
 
