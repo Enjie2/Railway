@@ -77,8 +77,8 @@ class FreeGameHostRenewal:
                     sb.click('button[aria-label*="close" i], button:has-text("×")')
                     self.log("✅ 已关闭弹窗")
                     time.sleep(3)
-        except Exception as e:
-            self.log(f"弹窗关闭异常: {e}")
+        except:
+            pass
 
     def run(self):
         self.log("🚀 开始执行 FreeGameHost 自动续期")
@@ -102,49 +102,49 @@ class FreeGameHostRenewal:
 
                     self.close_popups(sb)
 
-                    self.log("⏳ 等待登录输入框...")
+                    self.log("⏳ 等待输入框...")
                     sb.wait_for_element_present('input', timeout=60)
                     self.shot(sb, f"login_{idx}_inputs.png")
 
-                    self.log("✅ 填写邮箱和密码...")
-                    sb.type('input:first-of-type', email)
+                    self.log("✅ 填写账号密码...")
+                    sb.uc_type('input:first-of-type', email)          # UC 更真实的输入
                     time.sleep(2)
                     sb.wait_for_element_visible('input[type="password"]', timeout=30)
-                    sb.type('input[type="password"]', password)
+                    sb.uc_type('input[type="password"]', password)
 
-                    # ==================== 点击 LOGIN 按钮（最关键加强）===================
-                    self.log("⏳ 等待 LOGIN 按钮出现...")
-                    self.shot(sb, f"login_{idx}_before_click.png")   # 点击前截图
+                    # ==================== 最强提交方式 ====================
+                    self.log("⏳ 尝试登录提交...")
+                    self.shot(sb, f"login_{idx}_before_submit.png")
 
-                    button_selectors = [
-                        'button:has-text("LOGIN")',
-                        'button[type="submit"]',
-                        'button:has-text("Login")',
-                        'button:has-text("Sign in")'
-                    ]
-
+                    # 方式1：点击 LOGIN 按钮
                     clicked = False
-                    for sel in button_selectors:
-                        try:
-                            if sb.is_element_visible(sel, timeout=25):
-                                sb.click(sel)
-                                self.log(f"✅ 已点击 LOGIN 按钮（使用 {sel}）")
-                                clicked = True
-                                break
-                        except:
-                            continue
+                    for sel in ['button:has-text("LOGIN")', 'button[type="submit"]']:
+                        if sb.is_element_visible(sel, timeout=15):
+                            sb.uc_click(sel)
+                            self.log(f"✅ UC 点击按钮成功 ({sel})")
+                            clicked = True
+                            break
 
+                    # 方式2：密码框按 Enter 键（手动最常用）
                     if not clicked:
-                        # JS 保底点击（最强兜底）
-                        self.log("⚠️ 普通点击失败，尝试 JS 点击...")
-                        sb.execute_script("document.querySelector('button').click();")
-                        time.sleep(3)
+                        self.log("⚠️ 点击失败，尝试在密码框按 Enter...")
+                        sb.uc_type('input[type="password"]', "\n")   # Enter 键
 
-                    time.sleep(12)
+                    # 方式3：JS 强制提交表单（最强兜底）
+                    time.sleep(3)
+                    self.log("⚠️ 尝试 JS 强制提交表单...")
+                    sb.execute_script("""
+                        var form = document.querySelector('form');
+                        if (form) form.submit();
+                        else document.querySelectorAll('button').forEach(b => b.click());
+                    """)
+
+                    self.shot(sb, f"login_{idx}_after_submit.png")
+                    time.sleep(15)   # 给跳转足够时间
 
                     if "/auth/login" in sb.get_current_url():
-                        self.log("❌ 登录失败（仍在登录页）")
-                        self.send_tg("❌", "登录失败", masked, "N/A", "仍在登录页", screenshot=self.shot(sb, f"login_fail_{idx}.png"))
+                        self.log("❌ 仍然在登录页")
+                        self.send_tg("❌", "登录失败", masked, "N/A", "页面未跳转", screenshot=self.shot(sb, f"login_fail_{idx}.png"))
                         continue
 
                     self.log("✅ 登录成功")
@@ -169,7 +169,7 @@ class FreeGameHostRenewal:
                                 'button:has-text("RENEW SERVER")'
                             ]:
                                 if sb.is_element_visible(selector, timeout=20):
-                                    sb.click(selector)
+                                    sb.uc_click(selector)
                                     self.log(f"✅ 已点击续期按钮 → {server_id}")
                                     renew_clicked = True
                                     time.sleep(8)
@@ -177,7 +177,7 @@ class FreeGameHostRenewal:
                                     break
 
                             if not renew_clicked:
-                                self.log(f"⚠️ 未找到续期按钮（可能 cooldown 中）→ {server_id}")
+                                self.log(f"⚠️ 未找到续期按钮（可能 cooldown）→ {server_id}")
                                 self.shot(sb, f"no_renew_btn_{server_id}_{idx}.png")
 
                         except Exception as e:
