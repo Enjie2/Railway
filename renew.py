@@ -98,26 +98,29 @@ class FreeGameHostRenewal:
                     self.log("🌐 打开登录页面...")
                     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=12)
                     time.sleep(12)
-
-                    self.shot(sb, f"login_{idx}_raw.png")   # 原始页面截图
+                    self.shot(sb, f"login_{idx}_raw.png")
 
                     self.close_popups(sb)
 
-                    # 最稳的等待方式：直接等待任意输入框出现（不再依赖标题）
-                    self.log("⏳ 等待登录输入框出现（最多 60 秒）...")
+                    # 等待任意输入框出现（最可靠）
+                    self.log("⏳ 等待登录输入框...")
                     sb.wait_for_element_present('input', timeout=60)
-                    self.shot(sb, f"login_{idx}_form.png")
+                    self.shot(sb, f"login_{idx}_inputs.png")
 
-                    # 直接填第1个和第2个输入框（根据你截图结构）
-                    self.log("✅ 填写账号密码...")
-                    sb.type('input:first-of-type', email)           # USERNAME OR EMAIL
-                    sb.type('input:nth-of-type(2)', password)       # PASSWORD
+                    # 填写邮箱（第一个输入框）
+                    self.log("✅ 填写邮箱...")
+                    sb.type('input:first-of-type', email)
+                    time.sleep(2)
 
-                    # 点击 LOGIN 按钮
+                    # 填写密码（明确等待 type=password）
+                    self.log("✅ 填写密码...")
+                    sb.wait_for_element_visible('input[type="password"]', timeout=30)
+                    sb.type('input[type="password"]', password)
+
+                    # 点击登录
                     sb.click('button:has-text("LOGIN")')
                     time.sleep(12)
 
-                    # 检查是否登录成功
                     if "/auth/login" in sb.get_current_url():
                         self.log("❌ 登录失败（仍在登录页）")
                         self.send_tg("❌", "登录失败", masked, "N/A", "仍在登录页", screenshot=self.shot(sb, f"login_fail_{idx}.png"))
@@ -136,7 +139,6 @@ class FreeGameHostRenewal:
                             self.close_popups(sb)
                             self.shot(sb, f"server_{server_id}_{idx}.png")
 
-                            # 续期按钮
                             renew_clicked = False
                             for selector in [
                                 'button:has-text("增加8小时")',
@@ -154,7 +156,7 @@ class FreeGameHostRenewal:
                                     break
 
                             if not renew_clicked:
-                                self.log(f"⚠️ 未找到续期按钮（可能 cooldown）→ {server_id}")
+                                self.log(f"⚠️ 未找到续期按钮（可能 cooldown 中）→ {server_id}")
                                 self.shot(sb, f"no_renew_btn_{server_id}_{idx}.png")
 
                         except Exception as e:
