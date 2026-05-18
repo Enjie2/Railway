@@ -73,7 +73,7 @@ class FreeGameHostRenewal:
         self.log("🔍 关闭 Cookie/广告弹窗...")
         try:
             for _ in range(3):
-                if sb.is_element_visible('button[aria-label*="close" i], button:has-text("×"), button:has-text("关闭")', timeout=6):
+                if sb.is_element_visible('button[aria-label*="close" i], button:has-text("×"), button:has-text("关闭")', timeout=8):
                     sb.click('button[aria-label*="close" i], button:has-text("×")')
                     self.log("✅ 已关闭弹窗")
                     time.sleep(3)
@@ -96,27 +96,30 @@ class FreeGameHostRenewal:
                 try:
                     # ==================== 登录 ====================
                     self.log("🌐 打开登录页面...")
-                    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=10)
-                    time.sleep(10)
-                    self.shot(sb, f"login_{idx}_raw.png")
+                    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=12)
+                    time.sleep(12)
+
+                    self.shot(sb, f"login_{idx}_raw.png")   # 原始页面截图
 
                     self.close_popups(sb)
 
-                    # 等待登录标题（最可靠）
-                    self.log("⏳ 等待 Login to Continue 标题...")
-                    sb.wait_for_element_visible('h1:has-text("Login to Continue")', timeout=30)
+                    # 最稳的等待方式：直接等待任意输入框出现（不再依赖标题）
+                    self.log("⏳ 等待登录输入框出现（最多 60 秒）...")
+                    sb.wait_for_element_present('input', timeout=60)
                     self.shot(sb, f"login_{idx}_form.png")
 
-                    # 最稳的输入方式：直接用页面上的第1个和第2个 input
+                    # 直接填第1个和第2个输入框（根据你截图结构）
                     self.log("✅ 填写账号密码...")
-                    sb.type('input', email)                    # 第1个输入框 = USERNAME OR EMAIL
-                    sb.type('input:nth-of-type(2)', password)  # 第2个输入框 = PASSWORD
+                    sb.type('input:first-of-type', email)           # USERNAME OR EMAIL
+                    sb.type('input:nth-of-type(2)', password)       # PASSWORD
 
+                    # 点击 LOGIN 按钮
                     sb.click('button:has-text("LOGIN")')
-                    time.sleep(10)
+                    time.sleep(12)
 
+                    # 检查是否登录成功
                     if "/auth/login" in sb.get_current_url():
-                        self.log("❌ 登录失败")
+                        self.log("❌ 登录失败（仍在登录页）")
                         self.send_tg("❌", "登录失败", masked, "N/A", "仍在登录页", screenshot=self.shot(sb, f"login_fail_{idx}.png"))
                         continue
 
@@ -127,12 +130,13 @@ class FreeGameHostRenewal:
                     for server_id in SERVER_IDS:
                         try:
                             url = f"{PANEL_BASE}/server/{server_id}"
-                            self.log(f"🌐 打开服务器 {server_id}")
-                            sb.uc_open_with_reconnect(url, reconnect_time=6)
-                            time.sleep(8)
+                            self.log(f"🌐 打开服务器页面: {server_id}")
+                            sb.uc_open_with_reconnect(url, reconnect_time=8)
+                            time.sleep(10)
                             self.close_popups(sb)
                             self.shot(sb, f"server_{server_id}_{idx}.png")
 
+                            # 续期按钮
                             renew_clicked = False
                             for selector in [
                                 'button:has-text("增加8小时")',
@@ -141,9 +145,9 @@ class FreeGameHostRenewal:
                                 'button:has-text("+8")',
                                 'button:has-text("RENEW SERVER")'
                             ]:
-                                if sb.is_element_visible(selector, timeout=15):
+                                if sb.is_element_visible(selector, timeout=20):
                                     sb.click(selector)
-                                    self.log(f"✅ 已点击续期 → {server_id}")
+                                    self.log(f"✅ 已点击续期按钮 → {server_id}")
                                     renew_clicked = True
                                     time.sleep(8)
                                     success_count += 1
