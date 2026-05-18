@@ -2,8 +2,8 @@ name: FreeGameHost Auto Renew
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # 每6小时执行一次（UTC时间）
-  workflow_dispatch:        # 支持手动触发
+    - cron: '0 */6 * * *'     # 每6小时执行一次
+  workflow_dispatch:
 
 jobs:
   renew:
@@ -16,12 +16,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Playwright
+      - name: Install SeleniumBase
         run: |
-          pip install playwright
-          playwright install --with-deps chromium
+          pip install seleniumbase pyvirtualdisplay
 
-      - name: Run FreeGameHost Renew Script
+      - name: Run Renew Script
         env:
           FG_ACCOUNTS: ${{ secrets.FG_ACCOUNTS }}
           SERVER_IDS: ${{ secrets.SERVER_IDS }}
