@@ -16,9 +16,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Playwright + Stealth
+      - name: Install Playwright
         run: |
-          pip install playwright playwright-stealth
+          pip install playwright
           playwright install --with-deps chromium
 
       - name: Run FreeGameHost Renew Script
