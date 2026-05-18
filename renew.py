@@ -73,7 +73,7 @@ class FreeGameHostRenewal:
         self.log("🔍 关闭 Cookie/广告弹窗...")
         try:
             for _ in range(3):
-                if sb.is_element_visible('button[aria-label*="close" i], button:has-text("×"), button:has-text("关闭")', timeout=8):
+                if sb.wait_for_element_visible('button[aria-label*="close" i], button:has-text("×"), button:has-text("关闭")', timeout=8, raise_exception=False):
                     sb.click('button[aria-label*="close" i], button:has-text("×")')
                     self.log("✅ 已关闭弹窗")
                     time.sleep(3)
@@ -112,32 +112,31 @@ class FreeGameHostRenewal:
                     sb.wait_for_element_visible('input[type="password"]', timeout=30)
                     sb.type('input[type="password"]', password)
 
-                    # ==================== 最强提交 ====================
+                    # ==================== 登录提交 ====================
                     self.log("⏳ 尝试提交登录...")
                     self.shot(sb, f"login_{idx}_before_submit.png")
 
-                    # 方式1：点击按钮
+                    # 点击 LOGIN 按钮
                     clicked = False
                     for sel in ['button:has-text("LOGIN")', 'button[type="submit"]', 'button:has-text("Login")']:
-                        if sb.is_element_visible(sel, timeout=20):
-                            sb.click(sel)
-                            self.log(f"✅ 点击 LOGIN 按钮成功 ({sel})")
-                            clicked = True
-                            break
+                        try:
+                            if sb.wait_for_element_visible(sel, timeout=20, raise_exception=False):
+                                sb.click(sel)
+                                self.log(f"✅ 点击 LOGIN 按钮成功 ({sel})")
+                                clicked = True
+                                break
+                        except:
+                            continue
 
-                    # 方式2：密码框按 Enter
                     if not clicked:
-                        self.log("⚠️ 点击失败，尝试 Enter 键...")
+                        self.log("⚠️ 点击失败，尝试 Enter 键 + JS 提交...")
                         sb.type('input[type="password"]', "\n")
-
-                    # 方式3：JS 强制提交（最强）
-                    time.sleep(3)
-                    self.log("⚠️ 尝试 JS 强制提交表单...")
-                    sb.execute_script("""
-                        var form = document.querySelector('form');
-                        if (form) form.submit();
-                        else document.querySelectorAll('button').forEach(b => b.click());
-                    """)
+                        time.sleep(2)
+                        sb.execute_script("""
+                            var form = document.querySelector('form');
+                            if (form) form.submit();
+                            else document.querySelectorAll('button').forEach(b => b.click());
+                        """)
 
                     self.shot(sb, f"login_{idx}_after_submit.png")
                     time.sleep(15)
@@ -168,13 +167,16 @@ class FreeGameHostRenewal:
                                 'button:has-text("+8")',
                                 'button:has-text("RENEW SERVER")'
                             ]:
-                                if sb.is_element_visible(selector, timeout=20):
-                                    sb.click(selector)
-                                    self.log(f"✅ 已点击续期按钮 → {server_id}")
-                                    renew_clicked = True
-                                    time.sleep(8)
-                                    success_count += 1
-                                    break
+                                try:
+                                    if sb.wait_for_element_visible(selector, timeout=20, raise_exception=False):
+                                        sb.click(selector)
+                                        self.log(f"✅ 已点击续期按钮 → {server_id}")
+                                        renew_clicked = True
+                                        time.sleep(8)
+                                        success_count += 1
+                                        break
+                                except:
+                                    continue
 
                             if not renew_clicked:
                                 self.log(f"⚠️ 未找到续期按钮（可能 cooldown 中）→ {server_id}")
