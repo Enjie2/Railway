@@ -70,20 +70,19 @@ class FreeGameHostRenewal:
             self.log(f"TG发送失败: {e}")
 
     def close_popups(self, sb):
-        """强力关闭 Cookie 同意弹窗 + 广告弹窗"""
-        self.log("🔍 正在关闭所有弹窗...")
+        """关闭 Cookie 隐私弹窗 + 任何广告"""
+        self.log("🔍 正在关闭弹窗...")
         try:
-            # Cookie Consent 「同意」按钮
-            if sb.is_element_visible('button:has-text("同意")', timeout=10):
-                sb.click('button:has-text("同意")')
-                self.log("✅ 已点击 Cookie「同意」")
-                time.sleep(4)
-            # 广告 Close 按钮
-            for text in ["Close", "×", "✕", "关闭"]:
-                if sb.is_element_visible(f'button:has-text("{text}")', timeout=6):
+            # Google Cookie 隐私小弹窗（你截图里的那个）
+            if sb.is_element_visible('button[aria-label*="close" i], .x, button:has-text("×")', timeout=8):
+                sb.click('button[aria-label*="close" i], .x, button:has-text("×")')
+                self.log("✅ 已关闭 Cookie 隐私弹窗")
+                time.sleep(3)
+            # 其他可能的广告 Close
+            for text in ["Close", "✕", "关闭"]:
+                if sb.is_element_visible(f'button:has-text("{text}")', timeout=5):
                     sb.click(f'button:has-text("{text}")')
-                    self.log(f"✅ 已关闭 {text} 弹窗")
-                    time.sleep(3)
+                    time.sleep(2)
                     break
         except Exception as e:
             self.log(f"弹窗关闭异常: {e}")
@@ -106,70 +105,67 @@ class FreeGameHostRenewal:
                     self.log("🌐 打开登录页面...")
                     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=8)
                     time.sleep(8)
+                    self.shot(sb, f"login_{idx}_raw.png")          # 原始页面截图
 
-                    # 原始页面截图（调试用）
-                    self.shot(sb, f"login_{idx}_raw.png")
-
-                    # 关闭弹窗
                     self.close_popups(sb)
 
-                    # 等待登录表单出现 + 截图
-                    self.log("⏳ 等待邮箱输入框出现...")
-                    sb.wait_for_element_visible('input[type="email"], input[name="email"], input[placeholder*="Email" i]', timeout=25)
+                    # 根据你截图精确 selector
+                    self.log("⏳ 等待 USERNAME OR EMAIL 输入框...")
+                    sb.wait_for_element_visible('input[placeholder*="USERNAME OR EMAIL" i]', timeout=25)
                     self.shot(sb, f"login_{idx}_form.png")
 
-                    # 填充账号密码
-                    sb.type('input[type="email"], input[name="email"], input[placeholder*="Email" i]', email)
-                    sb.type('input[type="password"]', password)
+                    sb.type('input[placeholder*="USERNAME OR EMAIL" i]', email)
+                    sb.type('input[placeholder*="PASSWORD" i], input[type="password"]', password)
                     self.log("✅ 账号密码已填写")
 
-                    # 点击登录
-                    sb.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in"), button:has-text("登录")')
+                    sb.click('button:has-text("LOGIN")')
                     time.sleep(10)
 
                     if "/auth/login" in sb.get_current_url():
-                        self.log("❌ 登录失败（仍在登录页）")
+                        self.log("❌ 登录失败")
                         self.send_tg("❌", "登录失败", masked, "N/A", "仍在登录页", screenshot=self.shot(sb, f"login_fail_{idx}.png"))
                         continue
 
                     self.log("✅ 登录成功")
 
-                    # ==================== 续期服务器 ====================
+                    # ==================== 续期每个服务器 ====================
                     success_count = 0
                     for server_id in SERVER_IDS:
                         try:
                             url = f"{PANEL_BASE}/server/{server_id}"
                             self.log(f"🌐 打开服务器页面: {server_id}")
                             sb.uc_open_with_reconnect(url, reconnect_time=6)
-                            time.sleep(6)
+                            time.sleep(8)
                             self.close_popups(sb)
+                            self.shot(sb, f"server_{server_id}_{idx}.png")
 
-                            # 点击增加8小时按钮
+                            # RENEW SERVER 区域的续期按钮（根据你截图优化）
                             renew_clicked = False
                             for selector in [
                                 'button:has-text("增加8小时")',
                                 'button:has-text("8小时")',
                                 'button:has-text("Renew")',
                                 'button:has-text("+8")',
-                                'button:has-text("增加八小时")'
+                                'button:has-text("RENEW SERVER")',
+                                '[class*="renew"] button'
                             ]:
-                                if sb.is_element_visible(selector, timeout=12):
+                                if sb.is_element_visible(selector, timeout=15):
                                     sb.click(selector)
-                                    self.log(f"✅ 已成功点击续期按钮 → {server_id}")
+                                    self.log(f"✅ 已点击续期按钮 → {server_id}")
                                     renew_clicked = True
-                                    time.sleep(6)
+                                    time.sleep(8)
                                     success_count += 1
                                     break
 
                             if not renew_clicked:
-                                self.log(f"⚠️ 未找到续期按钮 → {server_id}")
+                                self.log(f"⚠️ 未找到续期按钮（可能在 cooldown 中）→ {server_id}")
                                 self.shot(sb, f"no_renew_btn_{server_id}_{idx}.png")
 
                         except Exception as e:
                             self.log(f"服务器 {server_id} 处理异常: {e}")
                             self.shot(sb, f"server_error_{server_id}_{idx}.png")
 
-                    # ==================== 总结通知 ====================
+                    # ==================== 总结 ====================
                     extra = f"成功续期 {success_count}/{len(SERVER_IDS)} 个服务器"
                     self.send_tg("✅", "续期完成", masked, ", ".join(SERVER_IDS), "已执行", extra, screenshot=self.shot(sb, f"final_{idx}.png"))
 
