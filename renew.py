@@ -4,17 +4,16 @@ import re
 import random
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-from playwright_stealth import stealth_sync   # ← 新增
 
 # ====================== 配置 ======================
-ACCOUNTS = os.getenv("FG_ACCOUNTS", "").strip()
+ACCOUNTS = os.getenv("FG_ACCOUNTS", "").strip()          # 邮箱-----密码   一行一个
 SERVER_IDS = [s.strip() for s in os.getenv("SERVER_IDS", "").split(",") if s.strip()]
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
 PANEL_URL = "https://panel.freegamehost.xyz"
 MAX_RETRIES = 3
-HEADLESS = True   # 本地测试可改 False
+HEADLESS = True   # 本地测试时可改成 False
 
 def send_telegram(message: str, screenshot_paths: list = None):
     if not (TG_BOT_TOKEN and TG_CHAT_ID):
@@ -40,21 +39,33 @@ def main():
     account_list = [line.strip() for line in ACCOUNTS.split("\n") if "-----" in line]
 
     with sync_playwright() as p:
+        # 加强版隐身参数（取代 playwright-stealth）
         browser = p.chromium.launch(
             headless=HEADLESS,
             args=[
                 "--no-sandbox",
+                "--disable-setuid-sandbox",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-infobars",
+                "--disable-background-networking",
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+                "--disable-client-side-phishing-detection",
             ]
         )
+
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
             viewport={"width": 1366, "height": 768},
-            locale="zh-CN"
+            locale="zh-CN",
+            extra_http_headers={
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            }
         )
+
         page = context.new_page()
-        stealth_sync(page)   # ← 核心隐身
 
         for account_line in account_list:
             try:
@@ -64,39 +75,35 @@ def main():
 
                 print(f"🔑 正在处理账号: {email}")
 
-                # ==================== 登录页面 ====================
+                # ==================== 登录 ====================
                 page.goto(f"{PANEL_URL}/auth/login", wait_until="networkidle", timeout=90000)
                 time.sleep(8)
 
-                # 处理 Ad Blocker Detected 页面
-                if page.get_by_text("Ad Blocker", timeout=3000).count() > 0 or \
-                   page.get_by_text("ad blocker", timeout=3000).count() > 0:
+                # 处理 Ad Blocker 页面
+                if any(text in page.content().lower() for text in ["ad blocker", "adblocker", "ad-block"]):
                     print("⚠️ 检测到 Ad Blocker 页面，尝试点击 Reload Page...")
                     page.get_by_text("Reload Page", timeout=10000).click()
                     page.wait_for_load_state("networkidle", timeout=60000)
                     time.sleep(10)
 
-                # 截图登录页（方便调试）
+                # 截图登录页（调试用）
                 page.screenshot(path=f"login_{email}.png")
 
-                # 填充邮箱（多 selector 适配）
+                # 填充邮箱（多 selector）
                 email_selectors = [
-                    'input[type="email"]',
-                    'input[name="email"]',
-                    'input[placeholder*="Email" i]',
-                    'input[placeholder*="邮箱" i]',
-                    page.get_by_role("textbox", name=re.compile("email|邮箱", re.I))
+                    'input[type="email"]', 'input[name="email"]',
+                    'input[placeholder*="Email" i]', 'input[placeholder*="邮箱" i]'
                 ]
                 for sel in email_selectors:
                     try:
-                        elem = page.locator(sel).first if isinstance(sel, str) else sel
+                        elem = page.locator(sel).first
                         if elem.is_visible(timeout=8000):
                             elem.fill(email)
                             break
                     except:
                         continue
 
-                # 填充密码
+                # 密码
                 page.fill('input[type="password"]', password)
 
                 # 点击登录
@@ -116,7 +123,7 @@ def main():
                             page.goto(f"{PANEL_URL}/server/{server_id}", wait_until="networkidle", timeout=60000)
                             time.sleep(6)
 
-                            # 增加8小时按钮
+                            # 增加8小时按钮（多 selector）
                             button_selectors = [
                                 'button:has-text("增加8小时")',
                                 'button:has-text("8小时")',
