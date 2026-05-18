@@ -102,23 +102,44 @@ class FreeGameHostRenewal:
 
                     self.close_popups(sb)
 
-                    # 等待任意输入框出现（最可靠）
                     self.log("⏳ 等待登录输入框...")
                     sb.wait_for_element_present('input', timeout=60)
                     self.shot(sb, f"login_{idx}_inputs.png")
 
-                    # 填写邮箱（第一个输入框）
-                    self.log("✅ 填写邮箱...")
+                    self.log("✅ 填写邮箱和密码...")
                     sb.type('input:first-of-type', email)
                     time.sleep(2)
-
-                    # 填写密码（明确等待 type=password）
-                    self.log("✅ 填写密码...")
                     sb.wait_for_element_visible('input[type="password"]', timeout=30)
                     sb.type('input[type="password"]', password)
 
-                    # 点击登录
-                    sb.click('button:has-text("LOGIN")')
+                    # ==================== 点击 LOGIN 按钮（最关键加强）===================
+                    self.log("⏳ 等待 LOGIN 按钮出现...")
+                    self.shot(sb, f"login_{idx}_before_click.png")   # 点击前截图
+
+                    button_selectors = [
+                        'button:has-text("LOGIN")',
+                        'button[type="submit"]',
+                        'button:has-text("Login")',
+                        'button:has-text("Sign in")'
+                    ]
+
+                    clicked = False
+                    for sel in button_selectors:
+                        try:
+                            if sb.is_element_visible(sel, timeout=25):
+                                sb.click(sel)
+                                self.log(f"✅ 已点击 LOGIN 按钮（使用 {sel}）")
+                                clicked = True
+                                break
+                        except:
+                            continue
+
+                    if not clicked:
+                        # JS 保底点击（最强兜底）
+                        self.log("⚠️ 普通点击失败，尝试 JS 点击...")
+                        sb.execute_script("document.querySelector('button').click();")
+                        time.sleep(3)
+
                     time.sleep(12)
 
                     if "/auth/login" in sb.get_current_url():
