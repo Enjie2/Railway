@@ -1,198 +1,168 @@
-import os
 import time
-import re
-import random
-from pathlib import Path
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+import os
+import requests
+import platform
+from datetime import datetime
+if "DISPLAY" not in os.environ:
+    if platform.system().lower() == "linux":
+        try:
+            from pyvirtualdisplay import Display
+            display = Display(visible=False, size=(1920, 1080))
+            display.start()
+            os.environ["DISPLAY"] = display.new_display_var
+        except:
+            pass
+from seleniumbase import SB
 
-# ====================== 配置 ======================
-ACCOUNTS = os.getenv("FG_ACCOUNTS", "").strip()          # 邮箱-----密码   一行一个
-SERVER_IDS = [s.strip() for s in os.getenv("SERVER_IDS", "").split(",") if s.strip()]
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
+# ================= 配置区域 =================
+TG_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
+ACCOUNTS = os.getenv("FG_ACCOUNTS", "")           # 邮箱-----密码 一行一个
+SERVER_IDS = [s.strip() for s in os.getenv("SERVER_IDS", "").split(",") if s.strip()]
 
-PANEL_URL = "https://panel.freegamehost.xyz"
-MAX_RETRIES = 3
-HEADLESS = True   # 本地测试可改 False
+LOGIN_URL = "https://panel.freegamehost.xyz/auth/login"
+PANEL_BASE = "https://panel.freegamehost.xyz"
 
-def send_telegram(message: str, screenshot_paths: list = None):
-    if not (TG_BOT_TOKEN and TG_CHAT_ID):
-        return
-    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "HTML"}
-    try:
-        import requests
-        requests.post(url, data=data, timeout=10)
-        if screenshot_paths:
-            for path in screenshot_paths:
-                if Path(path).exists():
-                    files = {"photo": open(path, "rb")}
-                    requests.post(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto", data=data, files=files, timeout=10)
-    except:
-        pass
+def parse_accounts(raw: str):
+    accounts = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line or "-----" not in line:
+            continue
+        parts = line.split("-----", 1)
+        if len(parts) == 2:
+            accounts.append((parts[0].strip(), parts[1].strip()))
+    return accounts
 
-def close_ad_popup(page):
-    print("🔍 尝试关闭广告弹窗...")
-    selectors = ['button:has-text("Close")', 'button:has-text("×")', 'button:has-text("✕")', '[class*="close"] button']
-    for sel in selectors:
+class FreeGameHostRenewal:
+    def __init__(self):
+        self.BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        self.screenshot_dir = os.path.join(self.BASE_DIR, "artifacts")
+        os.makedirs(self.screenshot_dir, exist_ok=True)
+
+    def mask_account(self, u):
+        if "@" in u:
+            local, domain = u.split("@", 1)
+            return f"{local[:2]}***@{domain}"
+        return u[:2] + "*" * (len(u) - 2) if len(u) > 2 else u
+
+    def log(self, msg):
+        print(f"[{time.strftime('%H:%M:%S')}] [INFO] {msg}", flush=True)
+
+    def shot(self, sb, name):
+        path = os.path.join(self.screenshot_dir, name)
+        sb.save_screenshot(path)
+        return path
+
+    def send_tg(self, icon, title, account_name, server_id, state_str, extra="", screenshot=None):
+        if not TG_TOKEN or not TG_CHAT_ID:
+            return
+        msg = f"{icon} {title}\n\n账号: {account_name}\n服务器: {server_id}\n状态: {state_str}\n{extra}\n\nFreeGameHost Auto Renew"
         try:
-            btn = page.locator(sel).first
-            if btn.is_visible(timeout=4000):
-                btn.click()
-                print("✅ 已关闭广告弹窗")
+            if screenshot and os.path.exists(screenshot):
+                url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+                with open(screenshot, "rb") as f:
+                    requests.post(url, data={"chat_id": TG_CHAT_ID, "caption": msg}, files={"photo": f})
+            else:
+                url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+                requests.post(url, data={"chat_id": TG_CHAT_ID, "text": msg})
+        except Exception as e:
+            self.log(f"TG发送失败: {e}")
+
+    def close_popups(self, sb):
+        """关闭 Cookie 同意弹窗 + 广告弹窗"""
+        self.log("🔍 正在关闭弹窗...")
+        try:
+            # Cookie 同意按钮
+            if sb.is_element_visible('button:has-text("同意")', timeout=8):
+                sb.click('button:has-text("同意")')
+                self.log("✅ 已点击「同意」")
                 time.sleep(3)
-                return True
-        except:
-            continue
-    return False
-
-def handle_cookie_consent(page):
-    print("🔍 尝试点击 Cookie「同意」...")
-    selectors = ['button:has-text("同意")', page.get_by_role("button", name=re.compile("同意", re.I))]
-    for sel in selectors:
-        try:
-            btn = page.locator(sel).first if isinstance(sel, str) else sel
-            if btn.is_visible(timeout=5000):
-                btn.click()
-                print("✅ 已点击「同意」")
-                time.sleep(4)
-                return True
-        except:
-            continue
-    return False
-
-def main():
-    if not ACCOUNTS or not SERVER_IDS:
-        send_telegram("❌ 未配置账号或服务器ID")
-        return
-
-    account_list = [line.strip() for line in ACCOUNTS.split("\n") if "-----" in line]
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=HEADLESS,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
-        )
-
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-            viewport={"width": 1366, "height": 768},
-            locale="zh-CN"
-        )
-
-        page = context.new_page()
-
-        for account_line in account_list:
-            email, password = account_line.split("-----", 1)
-            email = email.strip()
-            password = password.strip()
-
-            print(f"🔑 正在处理账号: {email}")
-
-            success = False
-            for attempt in range(MAX_RETRIES):
-                try:
-                    print(f"   → 第 {attempt+1} 次尝试打开登录页...")
-                    page.goto(f"{PANEL_URL}/auth/login", wait_until="domcontentloaded", timeout=120000)
-                    time.sleep(6)
-
-                    # 截图原始页面
-                    page.screenshot(path=f"login_{email}_step1_raw.png")
-
-                    # 处理弹窗
-                    close_ad_popup(page)
-                    handle_cookie_consent(page)
-
-                    # 再等页面完全稳定
-                    page.wait_for_load_state("networkidle", timeout=30000)
-                    page.screenshot(path=f"login_{email}_step2_clean.png")
-
-                    # 填充邮箱
-                    email_selectors = ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="Email" i]']
-                    for sel in email_selectors:
-                        try:
-                            elem = page.locator(sel).first
-                            if elem.is_visible(timeout=10000):
-                                elem.fill(email)
-                                break
-                        except:
-                            continue
-
-                    # 填充密码 + 登录
-                    page.fill('input[type="password"]', password)
-                    page.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in"), button:has-text("登录")', timeout=20000)
-
-                    page.wait_for_load_state("networkidle", timeout=60000)
-                    time.sleep(random.uniform(5, 8))
-
-                    print(f"✅ 账号 {email} 登录成功")
-                    success = True
+            # 广告 Close 按钮
+            for text in ["Close", "×", "✕"]:
+                if sb.is_element_visible(f'button:has-text("{text}")', timeout=5):
+                    sb.click(f'button:has-text("{text}")')
+                    self.log(f"✅ 已关闭 {text} 弹窗")
+                    time.sleep(2)
                     break
+        except:
+            pass
 
-                except Exception as e:
-                    print(f"   ⚠️ 第 {attempt+1} 次失败: {e}")
-                    if attempt == MAX_RETRIES - 1:
-                        raise
-                    time.sleep(10)
+    def run(self):
+        self.log("🚀 开始执行 FreeGameHost 自动续期")
+        accounts = parse_accounts(ACCOUNTS)
+        if not accounts:
+            self.log("❌ 未配置 FG_ACCOUNTS")
+            return
 
-            if not success:
-                continue
+        for idx, (email, password) in enumerate(accounts, 1):
+            masked = self.mask_account(email)
+            self.log(f"==== 账号 [{idx}] {masked} ====")
 
-            # ==================== 续期服务器 ====================
-            success_count = 0
-            screenshots = []
+            with SB(uc=True, test=True, headed=False,
+                    chromium_arg="--no-sandbox,--disable-dev-shm-usage,--disable-gpu") as sb:
+                try:
+                    # ==================== 登录 ====================
+                    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=6)
+                    time.sleep(6)
+                    self.close_popups(sb)
 
-            for server_id in SERVER_IDS:
-                for retry in range(MAX_RETRIES):
-                    try:
-                        page.goto(f"{PANEL_URL}/server/{server_id}", wait_until="domcontentloaded", timeout=60000)
-                        time.sleep(6)
+                    sb.type('input[type="email"], input[name="email"]', email)
+                    sb.type('input[type="password"]', password)
+                    sb.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in")')
+                    time.sleep(8)
 
-                        button_selectors = [
-                            'button:has-text("增加8小时")',
-                            'button:has-text("8小时")',
-                            'button:has-text("Renew")',
-                            'button:has-text("+8")',
-                            page.get_by_text(re.compile(r"8小时|Renew|increase", re.I)).first
-                        ]
+                    if "/auth/login" in sb.get_current_url():
+                        self.log("❌ 登录失败")
+                        self.send_tg("❌", "登录失败", masked, "N/A", "登录页未跳转", screenshot=self.shot(sb, f"login_fail_{idx}.png"))
+                        continue
 
-                        clicked = False
-                        for sel in button_selectors:
-                            try:
-                                btn = page.locator(sel).first if isinstance(sel, str) else sel
-                                if btn.is_visible(timeout=8000):
-                                    btn.click()
-                                    print(f"✅ 已点击续期: {server_id}")
-                                    clicked = True
+                    self.log("✅ 登录成功")
+
+                    # ==================== 续期每个服务器 ====================
+                    success_count = 0
+                    for server_id in SERVER_IDS:
+                        try:
+                            url = f"{PANEL_BASE}/server/{server_id}"
+                            sb.uc_open_with_reconnect(url, reconnect_time=6)
+                            time.sleep(6)
+                            self.close_popups(sb)
+
+                            # 点击增加8小时按钮（多种 selector 适配）
+                            renew_clicked = False
+                            for selector in [
+                                'button:has-text("增加8小时")',
+                                'button:has-text("8小时")',
+                                'button:has-text("Renew")',
+                                'button:has-text("+8")',
+                                'button:has-text("增加八小时")'
+                            ]:
+                                if sb.is_element_visible(selector, timeout=8):
+                                    sb.click(selector)
+                                    self.log(f"✅ 已点击续期按钮 → {server_id}")
+                                    renew_clicked = True
+                                    time.sleep(5)
+                                    success_count += 1
                                     break
-                            except:
+
+                            if not renew_clicked:
+                                self.log(f"⚠️ 未找到续期按钮 → {server_id}")
+                                self.shot(sb, f"no_renew_btn_{server_id}_{idx}.png")
                                 continue
 
-                        if not clicked:
-                            raise Exception("未找到续期按钮")
+                        except Exception as e:
+                            self.log(f"服务器 {server_id} 异常: {e}")
+                            self.shot(sb, f"server_error_{server_id}_{idx}.png")
 
-                        time.sleep(5)
-                        success_count += 1
+                    # ==================== 发送总结 ====================
+                    msg_extra = f"成功续期 {success_count}/{len(SERVER_IDS)} 个服务器"
+                    self.send_tg("✅", "续期完成", masked, ", ".join(SERVER_IDS), "已执行", msg_extra, screenshot=self.shot(sb, f"final_{idx}.png"))
 
-                        shot = f"screenshot_{server_id}.png"
-                        page.screenshot(path=shot)
-                        screenshots.append(shot)
-                        break
+                except Exception as e:
+                    self.log(f"❌ 账号处理异常: {e}")
+                    self.send_tg("❌", "异常终止", masked, "N/A", "脚本异常", str(e)[:200], screenshot=self.shot(sb, f"error_{idx}.png"))
 
-                    except Exception as e:
-                        print(f"⚠️ 服务器 {server_id} 第 {retry+1} 次失败: {e}")
-                        if retry == MAX_RETRIES - 1:
-                            raise
-                        time.sleep(10)
-
-            msg = f"""✅ FreeGameHost 续期完成
-账号: {email}
-服务器: {", ".join(SERVER_IDS)}
-成功: {success_count}/{len(SERVER_IDS)}
-时间: {time.strftime("%Y-%m-%d %H:%M:%S")}"""
-            send_telegram(msg, screenshots)
-
-        browser.close()
+        self.log("✅ 所有账号处理完毕")
 
 if __name__ == "__main__":
-    main()
+    FreeGameHostRenewal().run()
