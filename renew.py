@@ -3,7 +3,7 @@ import time
 import re
 import random
 from pathlib import Path
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 
 # ====================== 配置 ======================
 ACCOUNTS = os.getenv("FG_ACCOUNTS", "").strip()          # 邮箱-----密码   一行一个
@@ -13,7 +13,7 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
 PANEL_URL = "https://panel.freegamehost.xyz"
 MAX_RETRIES = 3
-HEADLESS = True   # 本地测试时可改成 False
+HEADLESS = True   # 本地测试可改 False
 
 def send_telegram(message: str, screenshot_paths: list = None):
     if not (TG_BOT_TOKEN and TG_CHAT_ID):
@@ -31,6 +31,47 @@ def send_telegram(message: str, screenshot_paths: list = None):
     except:
         pass
 
+def close_ad_popup(page):
+    """关闭广告弹窗"""
+    print("🔍 正在尝试关闭广告弹窗...")
+    close_selectors = [
+        'button:has-text("Close")', 'button:has-text("×")', 'button:has-text("✕")',
+        'button[aria-label*="Close" i]', '[class*="close"] button'
+    ]
+    for sel in close_selectors:
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible(timeout=3000):
+                btn.click()
+                print("✅ 已关闭广告弹窗")
+                time.sleep(3)
+                return True
+        except:
+            continue
+    return False
+
+def handle_cookie_consent(page):
+    """处理 Cookie Consent 弹窗（点击“同意”）"""
+    print("🔍 正在处理 Cookie Consent 弹窗...")
+    consent_selectors = [
+        'button:has-text("同意")',
+        'button:has-text("同意")',  # 重复确保优先级
+        page.get_by_role("button", name=re.compile("同意", re.I)),
+        'button:has-text("I agree")'  # 英文备用
+    ]
+    for sel in consent_selectors:
+        try:
+            btn = page.locator(sel).first if isinstance(sel, str) else sel
+            if btn.is_visible(timeout=5000):
+                btn.click()
+                print("✅ 已点击 Cookie Consent「同意」按钮")
+                time.sleep(4)
+                return True
+        except:
+            continue
+    print("ℹ️  未检测到 Cookie Consent 弹窗（可能已同意）")
+    return False
+
 def main():
     if not ACCOUNTS or not SERVER_IDS:
         send_telegram("❌ FreeGameHost 续期失败：未配置账号或服务器ID")
@@ -39,30 +80,15 @@ def main():
     account_list = [line.strip() for line in ACCOUNTS.split("\n") if "-----" in line]
 
     with sync_playwright() as p:
-        # 加强版隐身参数（取代 playwright-stealth）
         browser = p.chromium.launch(
             headless=HEADLESS,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--disable-infobars",
-                "--disable-background-networking",
-                "--disable-background-timer-throttling",
-                "--disable-renderer-backgrounding",
-                "--disable-client-side-phishing-detection",
-            ]
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
         )
 
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
             viewport={"width": 1366, "height": 768},
-            locale="zh-CN",
-            extra_http_headers={
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-            }
+            locale="zh-CN"
         )
 
         page = context.new_page()
@@ -75,21 +101,21 @@ def main():
 
                 print(f"🔑 正在处理账号: {email}")
 
-                # ==================== 登录 ====================
+                # ==================== 登录页面 ====================
                 page.goto(f"{PANEL_URL}/auth/login", wait_until="networkidle", timeout=90000)
                 time.sleep(8)
 
-                # 处理 Ad Blocker 页面
-                if any(text in page.content().lower() for text in ["ad blocker", "adblocker", "ad-block"]):
-                    print("⚠️ 检测到 Ad Blocker 页面，尝试点击 Reload Page...")
-                    page.get_by_text("Reload Page", timeout=10000).click()
-                    page.wait_for_load_state("networkidle", timeout=60000)
-                    time.sleep(10)
+                # 第一张截图（原始页面）
+                page.screenshot(path=f"login_{email}_step1_raw.png")
 
-                # 截图登录页（调试用）
-                page.screenshot(path=f"login_{email}.png")
+                # 处理弹窗
+                close_ad_popup(page)
+                handle_cookie_consent(page)
 
-                # 填充邮箱（多 selector）
+                # 第二张截图（处理完弹窗后）
+                page.screenshot(path=f"login_{email}_step2_clean.png")
+
+                # 填充邮箱
                 email_selectors = [
                     'input[type="email"]', 'input[name="email"]',
                     'input[placeholder*="Email" i]', 'input[placeholder*="邮箱" i]'
@@ -97,19 +123,19 @@ def main():
                 for sel in email_selectors:
                     try:
                         elem = page.locator(sel).first
-                        if elem.is_visible(timeout=8000):
+                        if elem.is_visible(timeout=10000):
                             elem.fill(email)
                             break
                     except:
                         continue
 
-                # 密码
+                # 填充密码
                 page.fill('input[type="password"]', password)
 
                 # 点击登录
-                page.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in"), button:has-text("登录")', timeout=15000)
+                page.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in"), button:has-text("登录")', timeout=20000)
                 page.wait_for_load_state("networkidle", timeout=60000)
-                time.sleep(random.uniform(4, 7))
+                time.sleep(random.uniform(5, 8))
 
                 print(f"✅ 账号 {email} 登录成功")
 
@@ -123,7 +149,6 @@ def main():
                             page.goto(f"{PANEL_URL}/server/{server_id}", wait_until="networkidle", timeout=60000)
                             time.sleep(6)
 
-                            # 增加8小时按钮（多 selector）
                             button_selectors = [
                                 'button:has-text("增加8小时")',
                                 'button:has-text("8小时")',
@@ -136,7 +161,7 @@ def main():
                             for sel in button_selectors:
                                 try:
                                     btn = page.locator(sel).first if isinstance(sel, str) else sel
-                                    if btn.is_visible(timeout=5000):
+                                    if btn.is_visible(timeout=8000):
                                         btn.click()
                                         print(f"✅ 已点击续期: {server_id}")
                                         clicked = True
@@ -171,8 +196,10 @@ def main():
             except Exception as e:
                 print(f"❌ 账号 {email} 处理失败: {e}")
                 send_telegram(f"❌ FreeGameHost 账号 {email} 续期失败\n错误: {str(e)[:300]}")
-                if Path(f"login_{email}.png").exists():
-                    send_telegram(f"📸 账号 {email} 登录页面截图", [f"login_{email}.png"])
+                # 发送调试截图
+                debug_shots = list(Path(".").glob(f"login_{email}*.png"))
+                if debug_shots:
+                    send_telegram(f"📸 账号 {email} 登录调试截图（含弹窗处理前后）", debug_shots)
 
         browser.close()
 
